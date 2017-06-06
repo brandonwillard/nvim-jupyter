@@ -54,7 +54,8 @@ class NVimJupyter:
         nvim: object
             The `neovim` communication channel.
         """
-        self.nvim = nvim.with_hook(nv.DecodeHook())
+        #self.nvim = nvim.with_hook(nv.DecodeHook())
+        self.nvim = nvim.with_decode()
         self.argp = u.set_argparser(c.args_to_set)
         self.new_kernel_started = None
         self.buffer = None
