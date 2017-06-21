@@ -1,47 +1,14 @@
-"""
-Flexible [neovim] - [Jupyter] kernel interaction. Augments [neovim] with the
-following functionality:
+import sys
+import logging
+from collections import Iterable
+from operator import methodcaller
 
-- `(c) JKernel [-e/--existing [filehint]]` - **first connect to kernel**
-
-  connect to new or existing kernel (using the `[-e/--existing [filehint]]`)
-  argument, where `[filehint]` is either the `*` (star) in `kernel-*.json`
-  or the absolute path of the connection file. If `JKernel` is used without any
-  arguments then it starts a new kernel. If `-e/--existing` is provided
-  (without the optional [filehint]) then an attempt to connect to an existing
-  kernel is made. If kernel is not found then it doesn't create a new kernel.
-  If [filehint] is given and not found, again, it doesn't create a kernel.
-
-- `(c) [range]JExecute`
-
-  send current line to be executed by the kernel or if `[range]` is given
-  execute the appropriate lines. This also works with visual selections
-  (including block selections). Example:
-  ```
-  bla bla bla print('test') more bla
-  some bla    test = 5; test
-  ```
-  it is possible here (for whatever reason) to select the text made out of
-  `print('test')` and `test = 5; test` and it will execute as if it were
-  two lines of code (think of `IPython`). This works because the selection
-  doesn't have any leading whitespace. In the more usual case, `print('test')`
-  and `test = 5; test` can be selected one at a time and the execution proceeds
-  as expected. _This upgrade of `JExecute` doesn't add new functions or
-  commands to [neovim] so it is quite natural to use_
-
-Legend `(c)` = command
-
-[neovim]: http://neovim.io/
-[Jupyter]: https://jupyter.org/
-"""
+import neovim as nv
 
 import jupyter_client as jc
-import neovim as nv
-from . import config as c
-from . import utils as u
 
-
-l = u.set_logger(__name__)
+import nvim_jupyter
+from nvim_jupyter import utils
 
 
 @nv.plugin
@@ -49,14 +16,14 @@ class NVimJupyter:
     def __init__(self, nvim):
         """Initialize NVimJupyter plugin
 
-        Paramters
+        Parameters
         ---------
         nvim: object
             The `neovim` communication channel.
         """
-        #self.nvim = nvim.with_hook(nv.DecodeHook())
+        # TODO: Does this mean we don't need to decode manually?
         self.nvim = nvim.with_decode()
-        self.argp = u.set_argparser(c.args_to_set)
+        self.argp = utils.set_argparser(nvim_jupyter.args_to_set)
         self.new_kernel_started = None
         self.buffer = None
         self.window = None
@@ -64,7 +31,7 @@ class NVimJupyter:
 
     @nv.command('JKernel', nargs='*', sync=True)
     def connect_handler(self, args):
-        """`neovim` command for connecting to new or existing kernel
+        """ Connect to a new or existing kernel.
 
         Parameters
         ----------
@@ -80,27 +47,32 @@ class NVimJupyter:
         if self.kc is not None:
             return
 
-        args = u.decode_args(self.nvim, args)
+        if isinstance(args, str) or not isinstance(args, Iterable):
+            args = [args]
+
+        args = map(methodcaller('decode', self.nvim.eval('&encoding')),
+                   args)
         args = self.argp.parse_args(['JKernel'] + args)
         try:
-            l.debug('KERNEL START')
             self.kc, self.new_kernel_started = self._connect_to_kernel(args)
-            l.debug('KERNEL BUFF')
-            # this should be executed once only anyway
-            self.buffer, self.window = self._set_buffer_and_window()
+
+            # self.buffer, self.window = self._set_buffer_and_window()
+
             # consume first iopub message (starting)
             self.kc.get_iopub_msg()
-            l.debug('KERNEL BEFORE SHELL {}', self.new_kernel_started)
-            self._print_to_buffer(
-                ['Jupyter {implementation_version} /'
-                 ' Python {language_info[version]}'
-                 .format(**self.kc.get_shell_msg()['content']),
-                 '']
-            )
-        except (OSError, FileNotFoundError):
+            shell_msg = self.kc.get_shell_msg()
+
+            logging.debug('KERNEL BEFORE SHELL {}', self.new_kernel_started)
+            # self._print_to_buffer(
+            #     ['Jupyter {implementation_version} /'
+            #      ' Python {language_info[version]}'
+            #      .format(**shell_msg['content']),
+            #      '']
+            # )
+        except OSError:
             self._error(msg='Could not find connection file. Not connected!',
                         prefix='[JKernel]: ')
-            l.debug('KERNEL EXCEPT')
+            logging.debug('KERNEL EXCEPT')
 
     @nv.command('JExecute', range='')
     def execute_handler(self, r):
@@ -117,11 +89,11 @@ class NVimJupyter:
         (y0, x0), (y1, x1) = (self.nvim.current.buffer.mark('<'),
                               self.nvim.current.buffer.mark('>'))
         x0, x1 = min(x0, x1), max(x0, x1)
-        l.debug('MARKS {}'.format((x0, x1, y0, y1)))
+        logging.debug('MARKS {}'.format((x0, x1, y0, y1)))
         # it's enough to verify that the rows are `(0, 0)` because
         # `neovim` valid row numbering starts at 1
         if y0 == y1 == 0:
-            (y0, y1), (x0, x1) = r, (0, c.MAX_I)
+            (y0, y1), (x0, x1) = r, (0, sys.maxsize)
         else:
             # for the time being deleting the marks will have to do (but only
             # in case there is an initial selection)
@@ -131,15 +103,16 @@ class NVimJupyter:
                          if y1 - y0 == 1 else
                          line[x0:x1].rstrip()
                          for line in self.nvim.current.buffer[y0:y1])
+
         msg_id = self.kc.execute(code)
         msg = self._get_iopub_msg(msg_id)
-        self._print_to_buffer(msg)
+        # self._print_to_buffer(msg)
 
     @nv.shutdown_hook
     def shutdown(self):
         """Don't know what this hook does...
         """
-        l.debug('shutdown hook')
+        logging.debug('shutdown hook')
         if self.new_kernel_started is True:
             self.kc.shutdown()
 
@@ -187,10 +160,10 @@ class NVimJupyter:
         new_kernel_started: bool
             Flag to keep track of new / existing kernel.
         """
-        l.debug('ARGS {}'.format(args))
+        logging.debug('ARGS {}'.format(args))
         if args.existing is not None:
             connection_file = jc.find_connection_file(filename=args.existing)
-            l.debug('CONNECT {}, {}'.format(connection_file, args.existing))
+            logging.debug('CONNECT {}, {}'.format(connection_file, args.existing))
             km = jc.KernelManager(connection_file=connection_file)
             km.load_connection_file()
             new_kernel_started = False
@@ -208,19 +181,19 @@ class NVimJupyter:
         msg = {}
         while True:
             iopub_msg = self.kc.get_iopub_msg()
-            l.debug('IOPUB {}'.format(iopub_msg))
+            logging.debug('IOPUB {}'.format(iopub_msg))
             if (
                 iopub_msg['parent_header']['msg_id'] == msg_id and
-                iopub_msg['msg_type'] in c.msg_types
+                iopub_msg['msg_type'] in nvim_jupyter.msg_types
             ):
                 for key in iopub_msg['content']:
                     msg[key] = iopub_msg['content'][key]
                     if isinstance(msg[key], list):
                         msg[key] = '\n'.join(msg[key])
             if (
-                iopub_msg['parent_header']['msg_type'] != 'kernel_info_request'
-                and iopub_msg['msg_type'] == 'status'
-                and iopub_msg['content']['execution_state'] == 'idle'
+                iopub_msg['parent_header']['msg_type'] != 'kernel_info_request' and
+                iopub_msg['msg_type'] == 'status' and
+                iopub_msg['content']['execution_state'] == 'idle'
             ):
                 break
         return msg
@@ -231,8 +204,8 @@ class NVimJupyter:
             self.buffer.append(msg)
         else:
             self.buffer[len(self.buffer)] = None
-            msg = u.format_msg(msg)
-            for key in c.messages:
+            msg = utils.format_msg(msg)
+            for key in nvim_jupyter.messages:
                 try:
                     self.buffer.append(msg[key])
                 except KeyError:

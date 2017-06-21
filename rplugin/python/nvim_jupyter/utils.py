@@ -1,15 +1,7 @@
 import argparse
 import logging
-import logging.config
-from . import config as c
 
-
-def set_logger(name):
-    logging.config.dictConfig(c.logger_config)
-    return logging.getLogger(name)
-
-
-l = set_logger(__name__)
+import nvim_jupyter as nj
 
 
 def set_argparser(args_to_set):
@@ -23,9 +15,9 @@ def set_argparser(args_to_set):
 
 
 def format_msg(msg):
-    '''Pretty format the message for output to `neovim` buffer
-    '''
-    l.debug('FORMAT {}'.format(msg))
+    r""" Pretty format the message for output to `neovim` buffer.
+    """
+    logging.debug('FORMAT {}'.format(msg))
     formatted_msg = dict(msg)
     formatted_msg['code'] = (
         msg['code'][:1] +
@@ -34,24 +26,25 @@ def format_msg(msg):
         .join(msg['code'][1:].splitlines())
     )
 
-    for key in c.messages:
+    for key in nj.messages:
         try:
             formatted_msg[key] = (
-                c.color_regex.sub('', c.messages[key].format(**formatted_msg))
+                nj.color_regex.sub('',
+                                   nj.messages[key].format(**formatted_msg))
                 .strip().splitlines()
             )
             if key != 'in':
                 formatted_msg[key] += ['']
         except KeyError:
             pass
-    l.debug('FORMATTED {}'.format(formatted_msg))
+    logging.debug('FORMATTED {}'.format(formatted_msg))
     return formatted_msg
 
 
 def decode_args(nvim, args):
-    """Helper function to decode from `bytes` to `str`
+    r""" Helper function to decode from `bytes` to `str`.
 
-    `neovim` has some issues with encoding in Python3.
+    FYI: `neovim` has some issues with encoding in Python3.
     """
     encoding = nvim.eval('&encoding')
     return [arg.decode(encoding) if isinstance(arg, bytes) else arg
